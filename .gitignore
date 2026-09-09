@@ -9,4 +9,5 @@ artifacts/
 !.env.example
 data/storage/
 .agentsroom/
+.serena/
 .DS_Store

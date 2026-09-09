@@ -1,4 +1,6 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 dotenv.config();
 
 export interface KeyLogEntry {
@@ -85,16 +87,33 @@ export class GeminiKeyRotator {
       successCount: 0,
     }));
 
-    // Update .env file
+    // Rewrite only the GEMINI_API_KEY_* lines in .env. Everything else in that
+    // file belongs to the user (RUVECTOR_URL, PORT, STORAGE_PATH, custom vars):
+    // this used to regenerate the whole file from a hardcoded template, which
+    // silently deleted any setting it did not know about.
     try {
-      const fs = require('fs');
-      let envText = '';
-      cleanKeys.forEach((k, idx) => {
-        envText += `GEMINI_API_KEY_${idx + 1}=${k}\n`;
-      });
-      envText += `PORT=3001\nSTORAGE_PATH=./data/storage\nAUTH_SECRET=personal_mind_secret_key_change_me\n`;
-      fs.writeFileSync('./.env', envText, 'utf-8');
-    } catch (e) {}
+      const envPath = path.resolve(process.cwd(), '.env');
+      const previous = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+      const kept = previous
+        .split(/\r?\n/)
+        .filter((line) => !/^\s*GEMINI_API_KEY_\d+\s*=/.test(line));
+
+      const keyLines = cleanKeys.map((k, idx) => `GEMINI_API_KEY_${idx + 1}=${k}`);
+      // Put the keys back where the first one was, so the file keeps its shape.
+      const insertAt = previous
+        .split(/\r?\n/)
+        .findIndex((line) => /^\s*GEMINI_API_KEY_\d+\s*=/.test(line));
+      const merged = insertAt >= 0
+        ? [...kept.slice(0, insertAt), ...keyLines, ...kept.slice(insertAt)]
+        : [...keyLines, ...kept];
+
+      const body = merged.join('\n').replace(/\n{3,}/g, '\n\n');
+      fs.writeFileSync(envPath, body.endsWith('\n') ? body : `${body}\n`, 'utf-8');
+    } catch (e: any) {
+      // Never silently swallow this: the in-memory pool updated but the file did
+      // not, so the keys vanish on restart and the cause is invisible.
+      console.error('[GeminiKeyRotator] Key pool updated in memory but .env could not be written:', e?.message || e);
+    }
 
     console.log(`[GeminiKeyRotator] Updated key pool with ${this.keys.length} manual API key(s).`);
   }
